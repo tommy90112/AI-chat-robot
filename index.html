@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>統計系學生對話機器人</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f0f2f5;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .chat-container {
+            width: 100%;
+            max-width: 500px;
+            height: 600px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .chat-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .chat-header p {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: flex-start;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message-content {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            position: relative;
+        }
+
+        .message.bot .message-content {
+            background-color: white;
+            color: #333;
+            border: 1px solid #e0e0e0;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message-icon {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 8px;
+            font-size: 16px;
+        }
+
+        .message.bot .message-icon {
+            background-color: #667eea;
+            color: white;
+        }
+
+        .source-badge {
+            display: inline-block;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-top: 5px;
+            background-color: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .typing-indicator {
+            display: none;
+            padding: 12px 16px;
+            background-color: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 18px;
+            margin-bottom: 15px;
+        }
+
+        .typing-indicator span {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #999;
+            margin: 0 2px;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes typing {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.7;
+            }
+            30% {
+                transform: translateY(-10px);
+                opacity: 1;
+            }
+        }
+
+        .chat-input-container {
+            padding: 20px;
+            background-color: white;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .input-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #user-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        #user-input:focus {
+            border-color: #667eea;
+        }
+
+        #send-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 45px;
+            height: 45px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        #send-btn:hover {
+            transform: scale(1.1);
+        }
+
+        #send-btn:active {
+            transform: scale(0.95);
+        }
+
+        .suggestions {
+            margin-top: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .suggestion-chip {
+            padding: 6px 12px;
+            background-color: #f0f2f5;
+            border: 1px solid #ddd;
+            border-radius: 16px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .suggestion-chip:hover {
+            background-color: #e3f2fd;
+            border-color: #667eea;
+            color: #667eea;
+        }
+
+        /* 響應式設計 */
+        @media (max-width: 600px) {
+            .chat-container {
+                height: 100vh;
+                max-width: 100%;
+                border-radius: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>🎓 統計系學生助手</h1>
+            <p>我可以回答關於課程、學分、實習、交換等問題</p>
+        </div>
+        
+        <div class="chat-messages" id="chat-messages">
+            <!-- 歡迎訊息 -->
+            <div class="message bot">
+                <div class="message-icon">🤖</div>
+                <div class="message-content">
+                    您好！我是統計系的智能助手，有什麼可以幫助您的嗎？
+                </div>
+            </div>
+            
+            <!-- 打字動畫 -->
+            <div class="message bot typing-indicator" id="typing-indicator">
+                <div class="message-icon">🤖</div>
+                <div class="message-content">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="chat-input-container">
+            <div class="input-wrapper">
+                <input 
+                    type="text" 
+                    id="user-input" 
+                    placeholder="輸入您的問題..."
+                    autocomplete="off"
+                >
+                <button id="send-btn">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13M22 2L15 22L11 13L2 9L22 2Z"/>
+                    </svg>
+                </button>
+            </div>
+            
+            <div class="suggestions">
+                <div class="suggestion-chip" onclick="sendSuggestion('統計系要修幾學分才能畢業？')">
+                    畢業學分
+                </div>
+                <div class="suggestion-chip" onclick="sendSuggestion('有哪些必修課程？')">
+                    必修課程
+                </div>
+                <div class="suggestion-chip" onclick="sendSuggestion('可以去哪裡實習？')">
+                    實習機會
+                </div>
+                <div class="suggestion-chip" onclick="sendSuggestion('有交換學生的機會嗎？')">
+                    交換計畫
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatMessages = document.getElementById('chat-messages');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const typingIndicator = document.getElementById('typing-indicator');
+
+        // 發送訊息
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            // 顯示用戶訊息
+            addMessage(message, 'user');
+            userInput.value = '';
+
+            // 顯示打字動畫
+            showTyping();
+
+            try {
+                const response = await fetch('http://127.0.0.1:5001/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message: message })
+                });
+
+                const data = await response.json();
+                hideTyping();
+
+                if (data.status === 'success') {
+                    const answer = data.data.answer;
+                    const source = data.data.source;
+                    const category = data.data.category;
+                    
+                    // 添加機器人回應
+                    addMessage(answer, 'bot', source, category);
+                } else {
+                    addMessage('抱歉，發生了錯誤。請稍後再試。', 'bot');
+                }
+            } catch (error) {
+                hideTyping();
+                console.error('Error:', error);
+                addMessage('無法連接到伺服器，請檢查網路連線。', 'bot');
+            }
+        }
+
+        // 添加訊息到聊天視窗
+        function addMessage(text, sender, source = null, category = null) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            
+            let iconContent = sender === 'user' ? '👤' : '🤖';
+            
+            let messageHTML = `
+                ${sender === 'bot' ? `<div class="message-icon">${iconContent}</div>` : ''}
+                <div class="message-content">
+                    ${text}
+                    ${source && sender === 'bot' ? `
+                        <br><span class="source-badge">
+                            ${source === 'knowledge_base' ? '📚 知識庫' : '🤖 AI 生成'} 
+                            ${category ? `• ${category}` : ''}
+                        </span>
+                    ` : ''}
+                </div>
+                ${sender === 'user' ? `<div class="message-icon">${iconContent}</div>` : ''}
+            `;
+            
+            messageDiv.innerHTML = messageHTML;
+            
+            // 插入在打字動畫之前
+            chatMessages.insertBefore(messageDiv, typingIndicator);
+            scrollToBottom();
+        }
+
+        // 顯示打字動畫
+        function showTyping() {
+            typingIndicator.style.display = 'flex';
+            scrollToBottom();
+        }
+
+        // 隱藏打字動畫
+        function hideTyping() {
+            typingIndicator.style.display = 'none';
+        }
+
+        // 滾動到底部
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // 發送建議問題
+        function sendSuggestion(text) {
+            userInput.value = text;
+            sendMessage();
+        }
+
+        // 事件監聽器
+        sendBtn.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // 初始化時聚焦輸入框
+        userInput.focus();
+    </script>
+</body>
+</html>
