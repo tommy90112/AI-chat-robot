@@ -9,8 +9,6 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 from collections import Counter
 import re
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
@@ -32,34 +30,63 @@ class StatsChatbot:
         # 如果要在本地運行模型
         self.tokenizer = None
         self.model = None
+        self.generation_config = None
+        self.prompt_engine = None
+        
         if use_local_llm:
             self._load_local_model()
     
     def _load_local_model(self):
-        """載入本地 Breeze2 模型（可選）"""
+        """載入本地 Breeze2 模型（使用 MediaTek 官方方法）"""
         try:
             logger.info("正在載入 Llama-Breeze2-3B 模型...")
-            model_name = "MediaTek-Research/Llama-Breeze2-3B-Instruct"
             
-            # 使用 4-bit 量化以節省記憶體（特別適合 8GB RAM）
-            from transformers import BitsAndBytesConfig
+            # 檢查是否已安裝必要套件
+            try:
+                from transformers import AutoModel, AutoTokenizer, GenerationConfig
+                import torch
+                from mtkresearch.llm.prompt import MRPromptV3
+            except ImportError as e:
+                logger.error(f"缺少必要套件: {e}")
+                logger.info("請安裝: pip install transformers==4.47.0 -U mtkresearch torch")
+                self.use_local_llm = False
+                return
             
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.float16,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type="nf4"
-            )
+            # MediaTek 官方載入方法
+            model_id = 'MediaTek-Research/Llama-Breeze2-3B-Instruct-v0_1'
             
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                quantization_config=quantization_config,
-                device_map="auto",
+            # 載入模型
+            self.model = AutoModel.from_pretrained(
+                model_id,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
                 trust_remote_code=True,
-                low_cpu_mem_usage=True  # 適合 8GB RAM
+                device_map='auto',
+                img_context_token_id=128212
+            ).eval()
+            
+            # 載入 tokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_id, 
+                trust_remote_code=True, 
+                use_fast=False
             )
+            
+            # 設定生成配置
+            self.generation_config = GenerationConfig(
+                max_new_tokens=512,  # 可調整
+                do_sample=True,
+                temperature=0.7,     # 提高以增加多樣性
+                top_p=0.9,          # 提高以增加多樣性
+                repetition_penalty=1.1,
+                eos_token_id=128009
+            )
+            
+            # 初始化 prompt engine
+            self.prompt_engine = MRPromptV3()
+            
             logger.info("模型載入完成")
+            
         except Exception as e:
             logger.error(f"載入本地模型失敗: {e}")
             logger.info("將使用 Hugging Face API")
@@ -159,78 +186,92 @@ class StatsChatbot:
             return best_match
         return None
     
-    def query_llm(self, query: str, context: str = "") -> str:
-        """調用 Breeze-7B 生成回答"""
-        # 構建提示詞（Breeze 格式）
-        system_prompt = """你是一個專為統計系學生設計的智能助手。
-        請用友善、專業的繁體中文回答問題。
-        如果問題涉及統計專業知識，請提供準確且易懂的解釋。
-        回答要簡潔明瞭，適合大學生理解。"""
-        
-        if context:
-            full_prompt = f"{system_prompt}\n\n參考資訊：{context}\n\n學生問題：{query}\n\n回答："
+    def inference(self, prompt: str, pixel_values=None) -> str:
+        """MediaTek 官方推論方法"""
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        if pixel_values is None:
+            output_tensors = self.model.generate(**inputs, generation_config=self.generation_config)
         else:
-            full_prompt = f"{system_prompt}\n\n學生問題：{query}\n\n回答："
+            output_tensors = self.model.generate(
+                **inputs, 
+                generation_config=self.generation_config, 
+                pixel_values=pixel_values.to(self.model.device, dtype=self.model.dtype)
+            )
         
+        # 解碼並提取回答
+        output_str = self.tokenizer.decode(output_tensors[0], skip_special_tokens=True)
+        
+        # 提取助手的回答部分
+        if "Assistant:" in output_str:
+            output_str = output_str.split("Assistant:")[-1].strip()
+        
+        return output_str
+    
+    def query_llm(self, query: str, context: str = "") -> str:
+        """調用 Breeze2 生成回答"""
         # 使用本地模型
         if self.use_local_llm and self.model and self.tokenizer:
-            return self._query_local_model(full_prompt)
+            return self._query_local_model(query, context)
         
         # 使用 Hugging Face API
-        return self._query_hf_api(full_prompt)
+        return self._query_hf_api(query, context)
     
-    def _query_local_model(self, prompt: str) -> str:
-        """使用本地 Breeze2 模型生成回答"""
+    def _query_local_model(self, query: str, context: str = "") -> str:
+        """使用本地 Breeze2 模型生成回答（MediaTek 官方方法）"""
         try:
-            # Breeze2 使用標準的 Llama chat template
-            messages = [
-                {"role": "system", "content": "你是一個專為統計系學生設計的智能助手。請用友善、專業的繁體中文回答問題。"},
-                {"role": "user", "content": prompt}
+            # 系統提示詞
+            sys_prompt = '你是一位專業的統計系助手，請用友善的繁體中文回答學生的問題。你的回答應該準確、易懂，並且對學生有幫助。'
+            
+            # 構建對話
+            conversation = [
+                {"role": "system", "content": sys_prompt}
             ]
             
-            # 使用 tokenizer 的 chat template
-            text = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True
-            )
+            # 如果有上下文，加入對話
+            if context:
+                conversation.append({
+                    "role": "user", 
+                    "content": f"參考資訊：{context}\n\n問題：{query}"
+                })
+            else:
+                conversation.append({"role": "user", "content": query})
             
-            inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+            # 使用 MRPromptV3 組合對話
+            prompt = self.prompt_engine.get_prompt(conversation)
             
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=300,  # 減少 token 數以節省記憶體
-                    temperature=0.7,
-                    top_p=0.9,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id
-                )
-            
-            response = self.tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
-            return response.strip()
+            # 進行推論
+            response = self.inference(prompt)
+            result = self.prompt_engine.parse_generated_str(response)
+            if isinstance(result, dict) and 'content' in result:
+                return result['content']
+            return response
             
         except Exception as e:
             logger.error(f"本地模型生成錯誤: {e}")
-            return "抱歉，系統處理您的問題時發生錯誤。"
+            return "抱歉，系統處理您的問題時發生錯誤。請稍後再試或聯繫系辦。"
     
-    def _query_hf_api(self, prompt: str) -> str:
+    def _query_hf_api(self, query: str, context: str = "") -> str:
         """使用 Hugging Face API 查詢 Breeze2"""
         try:
             headers = {
                 "Authorization": f"Bearer {self.hf_api_token}"
             } if self.hf_api_token else {}
             
-            # Breeze2 的對話格式
-            messages = [
-                {"role": "system", "content": "你是一個專為統計系學生設計的智能助手。請用友善、專業的繁體中文回答問題。"},
-                {"role": "user", "content": prompt}
-            ]
+            # 構建提示
+            system_message = "你是一個專為統計系學生設計的智能助手。請用友善、專業的繁體中文回答問題。"
+            
+            if context:
+                user_message = f"參考資訊：{context}\n\n學生問題：{query}"
+            else:
+                user_message = f"學生問題：{query}"
+            
+            # 簡單的提示格式
+            prompt = f"{system_message}\n\n{user_message}\n\n回答："
             
             payload = {
-                "inputs": messages,
+                "inputs": prompt,
                 "parameters": {
-                    "max_new_tokens": 300,  # 適合 3B 模型
+                    "max_new_tokens": 300,
                     "temperature": 0.7,
                     "top_p": 0.9,
                     "do_sample": True,
@@ -292,7 +333,7 @@ class StatsChatbot:
         response_time = (datetime.now() - start_time).total_seconds()
         return {
             "answer": llm_response,
-            "source": "llm",
+            "source": "llm" if self.use_local_llm else "api",
             "confidence": "medium",
             "response_time": response_time,
             "category": self._categorize_question(query)
@@ -381,7 +422,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'knowledge_base_loaded': chatbot is not None
+        'knowledge_base_loaded': chatbot is not None,
+        'local_model_loaded': chatbot.use_local_llm if chatbot else False
     })
 
 @app.route('/api/stats', methods=['GET'])
@@ -401,6 +443,17 @@ def get_stats():
     return jsonify({'error': '系統尚未初始化'}), 500
 
 if __name__ == '__main__':
+    print("="*50)
+    print("統計系對話機器人 - Breeze2 版本")
+    print("="*50)
+    print("\n請確保已安裝以下套件：")
+    print("1. pip install transformers==4.47.0")
+    print("2. pip install -U mtkresearch")
+    print("3. pip install torch flask flask-cors numpy")
+    print("\n如果要使用本地模型，請設定：")
+    print("export USE_LOCAL_MODEL=true")
+    print("="*50 + "\n")
+    
     # 初始化聊天機器人
     knowledge_base_path = 'statistic_qa_data.json'  # 使用你的檔案名稱
     
@@ -411,6 +464,11 @@ if __name__ == '__main__':
     
     # 檢查是否要使用本地模型
     use_local = os.getenv('USE_LOCAL_MODEL', 'false').lower() == 'true'
+    
+    if use_local:
+        logger.info("準備載入本地 Breeze2 模型...")
+        print("\n⚠️  注意：首次載入需要下載約 6GB 的模型檔案")
+        print("⚠️  建議記憶體至少 16GB 以獲得最佳效能\n")
     
     chatbot = StatsChatbot(knowledge_base_path, use_local_llm=use_local)
     logger.info(f"成功載入 {len(chatbot.knowledge_base)} 筆問答資料")
